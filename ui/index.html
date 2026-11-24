@@ -3,8 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>Mixi</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600&amp;family=Nunito:wght@500;600;700;800&amp;display=swap">
+<link rel="stylesheet" href="fonts/fonts.css">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -43,11 +42,33 @@
         <span>Atalhos de teclado</span>
         <svg class="menu-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg>
       </button>
+      <button class="menu-item" role="menuitem" data-action="modes">
+        <span>Modos</span>
+        <svg class="menu-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg>
+      </button>
+      <button class="menu-item" role="menuitem" data-action="auto">
+        <span>Automático</span>
+        <svg class="menu-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg>
+      </button>
+      <label class="menu-item switch">
+        <span>Avisar versão nova</span>
+        <input id="checkUpdates" type="checkbox" role="menuitemcheckbox">
+        <span class="knob" aria-hidden="true"></span>
+      </label>
       <button class="menu-item" role="menuitem" data-action="mixer">Abrir mixer do Windows</button>
       <button class="menu-item" role="menuitem" data-action="sound">Configurações de som</button>
       <button class="menu-item danger" role="menuitem" data-action="quit">Sair do Mixi</button>
+      <div id="versionLine" class="menu-title version-line"></div>
     </div>
   </header>
+
+  <div id="updateBar" class="update-bar" role="status" hidden>
+    <span class="update-text">Tem versão nova: <b id="updateVersion"></b></span>
+    <button id="updateGet" class="pill">Baixar</button>
+    <button id="updateLater" class="update-x" aria-label="Agora não (não avisar mais dessa versão)">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+    </button>
+  </div>
 
   <section class="card master" aria-label="Volume geral">
     <div class="master-top">
@@ -93,9 +114,116 @@
 
   <section id="apps" class="apps" aria-label="Volume por app"></section>
 
+  <div id="routeMenu" class="menu route-menu" role="menu" hidden>
+    <div id="routeTitle" class="menu-title">Onde esse app toca</div>
+    <div id="routeList" class="out-list"></div>
+    <p class="route-hint">Se o som não trocar na hora, pause e dê play de novo. O Windows lembra a escolha pras próximas vezes.</p>
+  </div>
+
   <div id="modes" class="modes" role="group" aria-label="Modos rápidos"></div>
 
-  <section id="hkView" class="hk-view" aria-label="Atalhos de teclado" hidden>
+  <section id="modesView" class="view auto-view" aria-label="Modos" hidden>
+    <div class="hk-top">
+      <button id="modesBack" class="icon-btn" aria-label="Voltar">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg>
+      </button>
+      <div class="hk-title">
+        <div class="hk-heading">Modos</div>
+        <div class="sub">os botões que ajustam tudo de uma vez</div>
+      </div>
+    </div>
+    <div class="auto-list">
+      <div id="modeForm" class="auto-card mode-form" hidden>
+        <div class="auto-title" id="mfTitle">Novo modo</div>
+        <input id="mfName" class="auto-input" maxlength="14" placeholder="Nome (ex.: Filme)" aria-label="Nome do modo">
+        <div id="mfIcons" class="icon-pick" role="radiogroup" aria-label="Ícone do modo"></div>
+        <label class="auto-check"><input id="mfMaster" type="checkbox"> <span id="mfMasterLabel">Volume geral</span></label>
+        <div class="auto-desc">Apps que esse modo ajusta (os outros ficam como estão):</div>
+        <div id="mfApps" class="mf-apps"></div>
+        <label id="mfNowRow" class="auto-check"><input id="mfNow" type="checkbox"> <span>Usar os volumes de agora</span></label>
+        <div class="hk-actions">
+          <button id="mfSave" class="pill">Salvar modo</button>
+          <button id="mfCancel" class="link-btn">Cancelar</button>
+        </div>
+      </div>
+      <div id="modeList" class="mode-list"></div>
+    </div>
+    <button id="modeNew" class="pill mode-new">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+      <span>Salvar os volumes de agora como modo</span>
+    </button>
+  </section>
+
+  <section id="autoView" class="view auto-view" aria-label="Automático" hidden>
+    <div class="hk-top">
+      <button id="autoBack" class="icon-btn" aria-label="Voltar">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg>
+      </button>
+      <div class="hk-title">
+        <div class="hk-heading">Automático</div>
+        <div class="sub">o Mixi cuida sozinho, até fechado</div>
+      </div>
+    </div>
+    <div class="auto-list">
+      <div class="auto-card">
+        <div class="auto-head">
+          <div class="auto-text">
+            <div class="auto-title">Abaixar a música quando alguém fala</div>
+            <div class="auto-desc">Quando alguém fala no Discord, Teams, Zoom ou WhatsApp, a música desce e volta sozinha.</div>
+          </div>
+          <label class="switch switch-only"><input id="duckOn" type="checkbox" aria-label="Abaixar a música quando alguém fala"><span class="knob" aria-hidden="true"></span></label>
+        </div>
+        <div id="duckBody" class="auto-body">
+          <label class="auto-row">
+            <span>Abaixar para</span>
+            <input id="duckLevel" class="slider" type="range" min="5" max="80" step="5" aria-label="Abaixar a música para quanto do volume">
+            <b id="duckLevelLabel">30%</b>
+          </label>
+          <label class="auto-row">
+            <span>O que abaixa</span>
+            <select id="duckWhat" class="auto-select">
+              <option value="music">Só música (Spotify, Deezer…)</option>
+              <option value="music-browser">Música e navegador</option>
+              <option value="all">Tudo, menos a chamada</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div class="auto-card">
+        <div class="auto-head">
+          <div class="auto-text">
+            <div class="auto-title">Modo automático</div>
+            <div class="auto-desc">Quando um app abre, o Mixi ativa um modo. Ex.: abriu o jogo, entra o modo Jogo.</div>
+          </div>
+          <label class="switch switch-only"><input id="autoOn" type="checkbox" aria-label="Modo automático"><span class="knob" aria-hidden="true"></span></label>
+        </div>
+        <div id="autoBody" class="auto-body">
+          <div id="ruleList" class="rule-list"></div>
+          <button id="ruleAdd" class="pill">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+            <span>Nova regra</span>
+          </button>
+          <label class="auto-check"><input id="autoRestore" type="checkbox"> <span>Quando o app fechar, voltar os volumes de antes</span></label>
+        </div>
+      </div>
+
+      <div class="auto-card">
+        <div class="auto-text">
+          <div class="auto-title">Apps que o Mixi não mexe</div>
+          <div class="auto-desc">Apps que escutam o som (LEDs, visualizadores, filtros de microfone). Abaixar ou mutar eles faz pararem de reagir, então os modos e o automático deixam eles em paz.</div>
+        </div>
+        <div id="protList" class="chips"></div>
+        <div class="chip-add">
+          <input id="protInput" class="auto-input" list="appChoices" placeholder="app ou nome do .exe" aria-label="App pra proteger">
+          <button id="protAdd" class="pill">Adicionar</button>
+        </div>
+      </div>
+    </div>
+    <datalist id="appChoices"></datalist>
+  </section>
+
+  <section id="hkView" class="view hk-view" aria-label="Atalhos de teclado" hidden>
     <div class="hk-top">
       <button id="hkBack" class="icon-btn" aria-label="Voltar">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg>
@@ -123,7 +251,8 @@
   <footer class="foot">
     <span class="label">Tema</span>
     <div id="themes" class="themes" role="group" aria-label="Tema"></div>
-    <span id="themeName" class="theme-name"></span>
+    <button id="themeAuto" class="theme-auto" aria-haspopup="true" aria-expanded="false"></button>
+    <div id="themeMenu" class="menu theme-menu" role="menu" hidden></div>
   </footer>
 </main>
 <script src="app.js"></script>

@@ -1,0 +1,57 @@
+# Publica uma versão do Mixi: é só criar uma tag "v0.2.0" (igual à versão do tauri.conf.json)
+# e enviar pro GitHub. O instalador e o .exe portátil aparecem na página de Releases.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Conferir a versão
+        shell: pwsh
+        run: |
+          $conf = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          if ("v$conf" -ne "${{ github.ref_name }}") {
+            throw "A tag ${{ github.ref_name }} não bate com a versão do tauri.conf.json (v$conf)."
+          }
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Testes
+        working-directory: src-tauri
+        run: cargo test --release --bin mixi
+
+      - name: Compilar o instalador
+        run: npx --yes @tauri-apps/cli@2 build
+
+      - name: Juntar os arquivos
+        shell: pwsh
+        run: |
+          $v = "${{ github.ref_name }}".TrimStart('v')
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item src-tauri/target/release/bundle/nsis/*.exe dist/
+          Copy-Item src-tauri/target/release/mixi.exe "dist/Mixi_${v}_portatil.exe"
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - name: Publicar
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Mixi ${{ github.ref_name }}
+          files: dist/*
+          generate_release_notes: true

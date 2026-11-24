@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod audio;
+mod automation;
 mod hotkeys;
 mod osd;
 mod settings;
@@ -160,6 +161,58 @@ fn check_keys(keys: String) -> Option<String> {
     hotkeys::parse(&keys).err()
 }
 
+fn automation_state(app: &AppHandle) -> serde_json::Value {
+    let s = settings::get(app);
+    serde_json::json!({ "ducking": s.ducking, "auto_modes": s.auto_modes, "protected": s.protected })
+}
+
+#[tauri::command]
+fn get_automation(app: AppHandle) -> serde_json::Value {
+    automation_state(&app)
+}
+
+/// A tela "Automático" manda tudo a cada mudança.
+#[tauri::command]
+fn set_automation(
+    app: AppHandle,
+    ducking: settings::Ducking,
+    auto_modes: settings::AutoModes,
+    protected: Vec<String>,
+) -> serde_json::Value {
+    settings::update(&app, |s| {
+        s.ducking = ducking;
+        s.auto_modes = auto_modes;
+        s.protected = protected;
+    });
+    automation_state(&app)
+}
+
+#[tauri::command]
+fn app_version(app: AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
+/// Abre a página de uma versão do Mixi no navegador. Só aceita o repositório do Mixi.
+#[tauri::command]
+fn open_release_page(url: String) -> Result<(), String> {
+    if !url.starts_with("https://github.com/Everteson/mixi/") {
+        return Err("endereço fora do repositório do Mixi".into());
+    }
+    std::process::Command::new("explorer.exe").arg(&url).spawn().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_modes(app: AppHandle) -> settings::Modes {
+    settings::get(&app).modes
+}
+
+#[tauri::command]
+fn set_modes(app: AppHandle, modes: settings::Modes) -> settings::Modes {
+    settings::update(&app, |s| s.modes = modes);
+    settings::get(&app).modes
+}
+
 #[tauri::command]
 fn show_osd(app: AppHandle, osd: osd::Osd) {
     osd::show(&app, osd);
@@ -173,6 +226,12 @@ async fn list_outputs() -> Result<Vec<audio::Output>, String> {
 #[tauri::command]
 async fn set_output(id: String) -> Result<(), String> {
     audio::set_output(&id)
+}
+
+/// Manda um app pra uma saída (`output: null` volta pra padrão).
+#[tauri::command]
+async fn set_app_output(key: String, output: Option<String>) -> Result<(), String> {
+    audio::set_app_output(&key, output.as_deref())
 }
 
 #[tauri::command]
@@ -266,6 +325,38 @@ fn main() {
         println!("saída agora: {}", out.name);
         return;
     }
+    // `mixi --app-output <app> <parte do nome da saída | padrao>`: manda um app pra uma saída.
+    if let Some(i) = args.iter().position(|a| a == "--app-output") {
+        let (Some(key), Some(wanted)) = (args.get(i + 1), args.get(i + 2).map(|s| s.to_lowercase())) else {
+            eprintln!("uso: mixi --app-output <app> <parte do nome da saída | padrao>");
+            std::process::exit(2);
+        };
+        let target = if wanted == "padrao" || wanted == "padrão" {
+            None
+        } else {
+            match audio::list_outputs().unwrap_or_default().into_iter().find(|o| o.name.to_lowercase().contains(&wanted)) {
+                Some(o) => Some(o),
+                None => {
+                    eprintln!("nenhuma saída com \"{wanted}\" no nome (veja `mixi --outputs`)");
+                    std::process::exit(2);
+                }
+            }
+        };
+        if let Err(e) = audio::set_app_output(&key.to_lowercase(), target.as_ref().map(|o| o.id.as_str())) {
+            eprintln!("erro: {e}");
+            std::process::exit(1);
+        }
+        println!("{key} agora toca em: {}", target.map(|o| o.name).unwrap_or_else(|| "a saída padrão".into()));
+        return;
+    }
+    // `mixi --sessions`: lista cada sessão de áudio (processo, saída, tocando ou não).
+    if args.iter().any(|a| a == "--sessions") {
+        match audio::debug_sessions() {
+            Ok(lines) => lines.iter().for_each(|l| println!("{l}")),
+            Err(e) => eprintln!("erro: {e}"),
+        }
+        return;
+    }
     // `mixi --dump`: imprime o que o app enxerga do áudio e sai (ajuda a depurar).
     // Com `--icons`, os ícones vêm inteiros (data URL) em vez do tamanho.
     if args.iter().any(|a| a == "--dump") {
@@ -320,8 +411,15 @@ fn main() {
             pause_hotkeys,
             check_keys,
             show_osd,
+            get_automation,
+            set_automation,
+            get_modes,
+            set_modes,
+            app_version,
+            open_release_page,
             list_outputs,
             set_output,
+            set_app_output,
             fit_window,
             set_pinned,
             get_pinned,
@@ -392,6 +490,7 @@ fn main() {
             hotkeys::apply(&handle);
             osd::create(&handle)?;
             trayface::start(handle.clone());
+            automation::start(handle.clone());
 
             if !start_hidden {
                 show_panel(&handle);
@@ -417,6 +516,12 @@ fn main() {
                 _ => {}
             }
         })
-        .run(tauri::generate_context!())
-        .expect("erro ao iniciar o Mixi");
+        .build(tauri::generate_context!())
+        .expect("erro ao iniciar o Mixi")
+        .run(|_app, event| {
+            // Fechando com a música abaixada: devolve o volume de antes.
+            if let tauri::RunEvent::Exit = event {
+                automation::restore_all();
+            }
+        });
 }

@@ -14,7 +14,10 @@ use base64::Engine;
 use serde::Serialize;
 use std::ffi::c_void;
 
-use windows::core::{Interface, GUID, HRESULT, PCWSTR, PWSTR};
+use windows::core::{w, Interface, GUID, HRESULT, HSTRING, PCWSTR, PWSTR};
+use windows::Win32::Media::Audio::{AudioSessionStateActive, EDataFlow};
+use windows::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
+use windows::Win32::System::WinRT::RoGetActivationFactory;
 use windows::Win32::Foundation::PROPERTYKEY;
 use windows::Win32::Media::Audio::{eCapture, eCommunications, eMultimedia, ERole, DEVICE_STATE_ACTIVE};
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
@@ -67,6 +70,187 @@ const PKEY_FORM_FACTOR: PROPERTYKEY = PROPERTYKEY {
     pid: 0,
 };
 
+// ---------- saída por app ----------
+// Também sem API pública. As Configurações do Windows ("Volume do app e preferências do
+// dispositivo") e o EarTrumpet usam a fábrica interna Windows.Media.Internal.AudioPolicyConfig.
+// O IID mudou no build 21390 (Windows 11); a ordem dos métodos é a mesma nas duas.
+macro_rules! audio_policy_factory {
+    ($name:ident, $iid:literal) => {
+        #[windows_core::interface($iid)]
+        unsafe trait $name: windows_core::IUnknown {
+            // IInspectable
+            fn GetIids(&self, count: *mut u32, iids: *mut *mut GUID) -> HRESULT;
+            fn GetRuntimeClassName(&self, name: *mut *mut c_void) -> HRESULT;
+            fn GetTrustLevel(&self, level: *mut i32) -> HRESULT;
+            // 19 métodos que não usamos (só ocupam o lugar na tabela)
+            fn add_CtxVolumeChange(&self) -> HRESULT;
+            fn remove_CtxVolumeChanged(&self) -> HRESULT;
+            fn add_RingerVibrateStateChanged(&self) -> HRESULT;
+            fn remove_RingerVibrateStateChange(&self) -> HRESULT;
+            fn SetVolumeGroupGainForId(&self) -> HRESULT;
+            fn GetVolumeGroupGainForId(&self) -> HRESULT;
+            fn GetActiveVolumeGroupForEndpointId(&self) -> HRESULT;
+            fn GetVolumeGroupsForEndpoint(&self) -> HRESULT;
+            fn GetCurrentVolumeContext(&self) -> HRESULT;
+            fn SetVolumeGroupMuteForId(&self) -> HRESULT;
+            fn GetVolumeGroupMuteForId(&self) -> HRESULT;
+            fn SetRingerVibrateState(&self) -> HRESULT;
+            fn GetRingerVibrateState(&self) -> HRESULT;
+            fn SetPreferredChatApplication(&self) -> HRESULT;
+            fn ResetPreferredChatApplication(&self) -> HRESULT;
+            fn GetPreferredChatApplication(&self) -> HRESULT;
+            fn GetCurrentChatApplications(&self) -> HRESULT;
+            fn add_ChatContextChanged(&self) -> HRESULT;
+            fn remove_ChatContextChanged(&self) -> HRESULT;
+            // os que usamos
+            fn SetPersistedDefaultAudioEndpoint(&self, pid: u32, flow: EDataFlow, role: ERole, device: *mut c_void) -> HRESULT;
+            fn GetPersistedDefaultAudioEndpoint(&self, pid: u32, flow: EDataFlow, role: ERole, device: *mut *mut c_void) -> HRESULT;
+            fn ClearAllPersistedApplicationDefaultEndpoints(&self) -> HRESULT;
+        }
+    };
+}
+audio_policy_factory!(IAudioPolicyConfigFactory11, "ab3d4648-e242-459f-b02f-541c70306324");
+audio_policy_factory!(IAudioPolicyConfigFactory10, "2a59116d-6c4f-45e0-a74f-707e3fef9258");
+
+enum PolicyFactory {
+    Win11(IAudioPolicyConfigFactory11),
+    Win10(IAudioPolicyConfigFactory10),
+}
+
+impl PolicyFactory {
+    fn get() -> R<Self> {
+        com_init();
+        let class = HSTRING::from("Windows.Media.Internal.AudioPolicyConfig");
+        unsafe {
+            if windows_build() >= 21390 {
+                RoGetActivationFactory::<IAudioPolicyConfigFactory11>(&class).map(Self::Win11).map_err(err)
+            } else {
+                RoGetActivationFactory::<IAudioPolicyConfigFactory10>(&class).map(Self::Win10).map_err(err)
+            }
+        }
+    }
+
+    unsafe fn set(&self, pid: u32, role: ERole, device: *mut c_void) -> HRESULT {
+        match self {
+            Self::Win11(f) => f.SetPersistedDefaultAudioEndpoint(pid, eRender, role, device),
+            Self::Win10(f) => f.SetPersistedDefaultAudioEndpoint(pid, eRender, role, device),
+        }
+    }
+
+    unsafe fn get_endpoint(&self, pid: u32, role: ERole, out: *mut *mut c_void) -> HRESULT {
+        match self {
+            Self::Win11(f) => f.GetPersistedDefaultAudioEndpoint(pid, eRender, role, out),
+            Self::Win10(f) => f.GetPersistedDefaultAudioEndpoint(pid, eRender, role, out),
+        }
+    }
+}
+
+/// O número do build do Windows (ex.: 26200), lido do registro.
+fn windows_build() -> u32 {
+    use std::sync::OnceLock;
+    static BUILD: OnceLock<u32> = OnceLock::new();
+    *BUILD.get_or_init(|| unsafe {
+        let mut buf = [0u16; 32];
+        let mut size = (buf.len() * 2) as u32;
+        let r = RegGetValueW(
+            HKEY_LOCAL_MACHINE,
+            w!("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion"),
+            w!("CurrentBuildNumber"),
+            RRF_RT_REG_SZ,
+            None,
+            Some(buf.as_mut_ptr() as _),
+            Some(&mut size),
+        );
+        if r.is_err() {
+            return 0;
+        }
+        let len = (size as usize / 2).saturating_sub(1).min(buf.len());
+        String::from_utf16_lossy(&buf[..len]).trim().parse().unwrap_or(0)
+    })
+}
+
+// A fábrica não usa o id curto da saída ("{0.0.0.00000000}.{guid}"), e sim o caminho do aparelho.
+const MMDEVAPI_TOKEN: &str = r"\\?\SWD#MMDEVAPI#";
+const DEVINTERFACE_AUDIO_RENDER: &str = "#{e6327cad-dcec-4949-ae8a-991e976a79d2}";
+
+fn pack_device_id(id: &str) -> String {
+    format!("{MMDEVAPI_TOKEN}{id}{DEVINTERFACE_AUDIO_RENDER}")
+}
+
+fn unpack_device_id(path: &str) -> String {
+    path.strip_prefix(MMDEVAPI_TOKEN)
+        .unwrap_or(path)
+        .strip_suffix(DEVINTERFACE_AUDIO_RENDER)
+        .unwrap_or(path)
+        .to_string()
+}
+
+/// A saída escolhida pra um processo, se ele não segue a padrão.
+fn persisted_output(factory: &PolicyFactory, pid: u32) -> Option<String> {
+    unsafe {
+        let mut raw: *mut c_void = std::ptr::null_mut();
+        if factory.get_endpoint(pid, eMultimedia, &mut raw).is_err() || raw.is_null() {
+            return None;
+        }
+        // O Windows entrega um HSTRING nosso: ao virar HSTRING aqui, ele é liberado no fim.
+        let hs: HSTRING = std::mem::transmute(raw);
+        let id = unpack_device_id(&hs.to_string());
+        (!id.is_empty()).then_some(id)
+    }
+}
+
+/// Manda um app (todas as sessões dele) pra uma saída. `None` volta a seguir a padrão do Windows.
+pub fn set_app_output(key: &str, output_id: Option<&str>) -> R<()> {
+    let pids: Vec<u32> = {
+        let mut p: Vec<u32> = sessions()?.into_iter().filter(|s| s.key == key && s.pid != 0).map(|s| s.pid).collect();
+        p.sort_unstable();
+        p.dedup();
+        p
+    };
+    if pids.is_empty() {
+        return Err("esse app não está usando o som agora".into());
+    }
+    let factory = PolicyFactory::get()?;
+    let packed = output_id.map(|id| HSTRING::from(pack_device_id(id)));
+    // HSTRING é um ponteiro só; nulo = "seguir a padrão".
+    let raw: *mut c_void = match &packed {
+        Some(hs) => unsafe { std::mem::transmute_copy(hs) },
+        None => std::ptr::null_mut(),
+    };
+    for pid in pids {
+        for role in [eConsole, eMultimedia] {
+            unsafe { factory.set(pid, role, raw) }.ok().map_err(err)?;
+        }
+    }
+    drop(packed);
+    ROUTES.lock().unwrap().0 = None; // a próxima leitura busca de novo
+    Ok(())
+}
+
+// O painel lê o estado a cada 150 ms, mas a lista de saídas e a saída de cada app quase
+// nunca mudam: guardamos por 2 s em vez de perguntar ao Windows toda vez.
+const ROUTE_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+type RouteCache = (Option<std::time::Instant>, Vec<Output>, HashMap<u32, Option<Route>>);
+static ROUTES: LazyLock<Mutex<RouteCache>> = LazyLock::new(|| Mutex::new((None, Vec::new(), HashMap::new())));
+
+fn cached_route(pid: u32) -> Option<Route> {
+    let mut cache = ROUTES.lock().unwrap();
+    if cache.0.is_none_or(|t| t.elapsed() > ROUTE_TTL) {
+        *cache = (Some(std::time::Instant::now()), list_outputs().unwrap_or_default(), HashMap::new());
+    }
+    if let Some(r) = cache.2.get(&pid) {
+        return r.clone();
+    }
+    let route = PolicyFactory::get().ok().and_then(|f| persisted_output(&f, pid)).map(|id| {
+        match cache.1.iter().find(|o| o.id == id) {
+            Some(o) => Route { id, name: o.name.clone(), kind: o.kind, connected: true },
+            None => Route { id, name: "Saída desconectada".into(), kind: "other", connected: false },
+        }
+    });
+    cache.2.insert(pid, route.clone());
+    route
+}
+
 #[derive(Serialize)]
 pub struct Output {
     pub id: String,
@@ -87,6 +271,11 @@ pub struct AppInfo {
     pub muted: bool,
     pub peak: f32,
     pub system: bool,
+    /// Saída escolhida só pra esse app; None = segue a padrão do Windows.
+    pub route: Option<Route>,
+    /// id da saída onde ele está tocando de fato (pode ser outra mesmo sem `route`:
+    /// alguns apps, como o Discord, escolhem a saída sozinhos).
+    pub playing_on: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -101,6 +290,7 @@ pub struct MicState {
 pub struct MixerState {
     pub mic: Option<MicState>,
     pub device: String,
+    pub device_id: String,
     pub device_kind: &'static str,
     pub master: f32,
     pub master_muted: bool,
@@ -110,10 +300,25 @@ pub struct MixerState {
 
 struct Session {
     key: String,
+    pid: u32,
+    /// id da saída onde essa sessão está tocando
+    device: String,
+    /// a sessão está tocando agora (não só aberta)
+    active: bool,
     exe: Option<String>,
     system: bool,
     volume: ISimpleAudioVolume,
     meter: Option<IAudioMeterInformation>,
+}
+
+/// Pra onde um app foi mandado (quando não segue a saída padrão do Windows).
+#[derive(Serialize, Clone)]
+pub struct Route {
+    pub id: String,
+    pub name: String,
+    pub kind: &'static str,
+    /// false: a saída escolhida não está ligada agora (o Windows usa a padrão até ela voltar).
+    pub connected: bool,
 }
 
 /// Nome bonito e ícone por executável (calcular o ícone custa um pouco, então guardamos).
@@ -234,8 +439,7 @@ fn step(current: f32, delta: f32) -> f32 {
 
 /// Sobe/desce o volume de um app. None se esse app não tem sessão de áudio.
 pub fn nudge_app(key: &str, delta: f32) -> R<Option<(String, f32)>> {
-    let dev = default_device()?;
-    let list: Vec<Session> = sessions(&dev)?.into_iter().filter(|s| s.key == key).collect();
+    let list: Vec<Session> = sessions()?.into_iter().filter(|s| s.key == key).collect();
     let Some(first) = list.first() else { return Ok(None) };
     let v = step(unsafe { first.volume.GetMasterVolume() }.unwrap_or(1.0), delta);
     for s in &list {
@@ -278,6 +482,28 @@ pub fn next_output() -> R<(String, &'static str)> {
     Ok((next.name.clone(), next.kind))
 }
 
+/// Sessão "leve" pro automático: só o app, o volume e o medidor. Os objetos são COM:
+/// use na mesma thread que pediu.
+pub struct LiteSession {
+    pub key: String,
+    pub volume: ISimpleAudioVolume,
+    pub meter: Option<IAudioMeterInformation>,
+}
+
+pub fn lite_sessions() -> R<Vec<LiteSession>> {
+    Ok(sessions()?.into_iter().map(|s| LiteSession { key: s.key, volume: s.volume, meter: s.meter }).collect())
+}
+
+/// Pra depurar: cada sessão de áudio, com processo, saída e se está tocando.
+pub fn debug_sessions() -> R<Vec<String>> {
+    let outputs = list_outputs().unwrap_or_default();
+    let name = |id: &str| outputs.iter().find(|o| o.id == id).map(|o| o.name.clone()).unwrap_or_else(|| id.to_string());
+    Ok(sessions()?
+        .into_iter()
+        .map(|s| format!("{:<18} pid {:<6} {:<8} {}", s.key, s.pid, if s.active { "tocando" } else { "parada" }, name(&s.device)))
+        .collect())
+}
+
 /// O volume geral está no mudo?
 pub fn master_muted() -> bool {
     let Ok(dev) = default_device() else { return false };
@@ -298,8 +524,7 @@ pub fn toggle_master_mute() -> R<bool> {
 
 /// Alterna o mudo de um app. Devolve (nome, ficou mudo); None se ele não tem sessão de áudio.
 pub fn toggle_app_mute(key: &str) -> R<Option<(String, bool)>> {
-    let dev = default_device()?;
-    let list: Vec<Session> = sessions(&dev)?.into_iter().filter(|s| s.key == key).collect();
+    let list: Vec<Session> = sessions()?.into_iter().filter(|s| s.key == key).collect();
     let Some(first) = list.first() else { return Ok(None) };
     let muted = !unsafe { first.volume.GetMute() }.map(|b| b.as_bool()).unwrap_or(false);
     for s in &list {
@@ -316,8 +541,7 @@ pub fn toggle_app_mute(key: &str) -> R<Option<(String, bool)>> {
 
 /// Algum app (fora os sons do sistema) está tocando agora?
 pub fn any_playing() -> bool {
-    let Ok(dev) = default_device() else { return false };
-    let Ok(list) = sessions(&dev) else { return false };
+    let Ok(list) = sessions() else { return false };
     list.iter().any(|s| unsafe {
         !s.system
             && !s.volume.GetMute().map(|b| b.as_bool()).unwrap_or(false)
@@ -576,31 +800,58 @@ fn exe_meta(path: &str) -> (String, Option<String>) {
     meta
 }
 
-fn sessions(dev: &IMMDevice) -> R<Vec<Session>> {
+/// As sessões de áudio de uma saída.
+fn device_sessions(dev: &IMMDevice, with_system: bool, out: &mut Vec<Session>) -> R<()> {
+    let device = device_id(dev).unwrap_or_default();
     unsafe {
         let mgr: IAudioSessionManager2 = dev.Activate(CLSCTX_ALL, None).map_err(err)?;
         let list = mgr.GetSessionEnumerator().map_err(err)?;
         let n = list.GetCount().map_err(err)?;
-        let mut out = Vec::new();
         for i in 0..n {
             let Ok(ctl) = list.GetSession(i) else { continue };
-            if matches!(ctl.GetState(), Ok(s) if s == AudioSessionStateExpired) {
+            let state = ctl.GetState().unwrap_or(AudioSessionStateExpired);
+            if state == AudioSessionStateExpired {
                 continue;
             }
+            let active = state == AudioSessionStateActive;
             let Ok(ctl2) = ctl.cast::<IAudioSessionControl2>() else { continue };
             let Ok(volume) = ctl.cast::<ISimpleAudioVolume>() else { continue };
             let meter = ctl.cast::<IAudioMeterInformation>().ok();
             let system = ctl2.IsSystemSoundsSession() == S_OK;
             if system {
-                out.push(Session { key: SYSTEM_KEY.into(), exe: None, system, volume, meter });
+                if with_system {
+                    out.push(Session { key: SYSTEM_KEY.into(), pid: 0, device: device.clone(), active, exe: None, system, volume, meter });
+                }
                 continue;
             }
             let pid = ctl2.GetProcessId().unwrap_or(0);
             let Some(exe) = exe_path(pid) else { continue };
-            out.push(Session { key: key_for_exe(&exe), exe: Some(exe), system, volume, meter });
+            out.push(Session { key: key_for_exe(&exe), pid, device: device.clone(), active, exe: Some(exe), system, volume, meter });
         }
-        Ok(out)
+        Ok(())
     }
+}
+
+/// As sessões de todas as saídas ativas (a padrão primeiro). Um app mandado pro fone, por
+/// exemplo, só aparece na sessão do fone, então não dá pra olhar só a saída padrão.
+/// Os "sons do sistema" vêm só da saída padrão.
+fn sessions() -> R<Vec<Session>> {
+    let en = enumerator()?;
+    let mut out = Vec::new();
+    unsafe {
+        let default = en.GetDefaultAudioEndpoint(eRender, eConsole).map_err(err)?;
+        let default_id = device_id(&default);
+        device_sessions(&default, true, &mut out)?;
+        let col = en.EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE).map_err(err)?;
+        for i in 0..col.GetCount().map_err(err)? {
+            let Ok(dev) = col.Item(i) else { continue };
+            if device_id(&dev) == default_id {
+                continue;
+            }
+            let _ = device_sessions(&dev, false, &mut out);
+        }
+    }
+    Ok(out)
 }
 
 pub fn get_state() -> R<MixerState> {
@@ -616,12 +867,22 @@ pub fn get_state() -> R<MixerState> {
 
         let mut apps: Vec<AppInfo> = Vec::new();
         let mut index: HashMap<String, usize> = HashMap::new();
-        for s in sessions(&dev)? {
+        let mut active_seen: Vec<String> = Vec::new();
+        // Pra dizer pra onde cada app foi mandado (se a fábrica não existir, só não mostramos).
+        let route_for = |pid: u32| cached_route(pid);
+        for s in sessions()? {
             let peak = s.meter.as_ref().and_then(|m| m.GetPeakValue().ok()).unwrap_or(0.0);
             if let Some(&i) = index.get(&s.key) {
                 let a = &mut apps[i];
                 a.peak = a.peak.max(peak);
+                if s.active && !active_seen.contains(&s.key) {
+                    a.playing_on = s.device.clone();
+                    active_seen.push(s.key.clone());
+                }
                 continue;
+            }
+            if s.active {
+                active_seen.push(s.key.clone());
             }
             let (name, icon) = match &s.exe {
                 Some(p) => exe_meta(p),
@@ -636,18 +897,19 @@ pub fn get_state() -> R<MixerState> {
                 muted: s.volume.GetMute().map(|b| b.as_bool()).unwrap_or(false),
                 peak,
                 system: s.system,
+                route: if s.pid != 0 { route_for(s.pid) } else { None },
+                playing_on: s.device.clone(),
             });
         }
         apps.sort_by(|a, b| a.system.cmp(&b.system).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
 
-        Ok(MixerState { mic: mic_state(), device: device_name(&dev), device_kind: device_kind(&dev), master, master_muted, master_peak, apps })
+        Ok(MixerState { mic: mic_state(), device: device_name(&dev), device_id: device_id(&dev).unwrap_or_default(), device_kind: device_kind(&dev), master, master_muted, master_peak, apps })
     }
 }
 
 pub fn set_app_volume(key: &str, volume: f32) -> R<()> {
-    let dev = default_device()?;
     let v = volume.clamp(0.0, 1.0);
-    for s in sessions(&dev)?.into_iter().filter(|s| s.key == key) {
+    for s in sessions()?.into_iter().filter(|s| s.key == key) {
         unsafe {
             s.volume.SetMasterVolume(v, std::ptr::null()).map_err(err)?;
         }
@@ -656,8 +918,7 @@ pub fn set_app_volume(key: &str, volume: f32) -> R<()> {
 }
 
 pub fn set_app_mute(key: &str, muted: bool) -> R<()> {
-    let dev = default_device()?;
-    for s in sessions(&dev)?.into_iter().filter(|s| s.key == key) {
+    for s in sessions()?.into_iter().filter(|s| s.key == key) {
         unsafe {
             s.volume.SetMute(muted, std::ptr::null()).map_err(err)?;
         }

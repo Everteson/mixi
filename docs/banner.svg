@@ -72,7 +72,7 @@
   <!-- título -->
   <text x="450" y="150" fill="#3A2A3F" font-family="Fredoka, Nunito, 'Segoe UI', system-ui, sans-serif" font-size="88" font-weight="600" letter-spacing="-1">Mixi</text>
   <text x="454" y="200" fill="#6A5470" font-family="Nunito, 'Segoe UI', system-ui, sans-serif" font-size="27" font-weight="600">O volume de cada app, a um clique na bandeja.</text>
-  <text x="454" y="238" fill="#C24E86" font-family="Nunito, 'Segoe UI', system-ui, sans-serif" font-size="18" font-weight="800" letter-spacing="2">WINDOWS 10/11  ·  VOLUME POR APP  ·  TROCA DE SAÍDA  ·  4 TEMAS</text>
+  <text x="454" y="238" fill="#C24E86" font-family="Nunito, 'Segoe UI', system-ui, sans-serif" font-size="18" font-weight="800" letter-spacing="2">WINDOWS 10/11  ·  VOLUME POR APP  ·  TROCA DE SAÍDA  ·  6 TEMAS</text>
 
   <!-- bolinhas dos temas -->
   <g>

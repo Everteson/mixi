@@ -52,6 +52,45 @@ pub fn set_autostart(enabled: bool) -> Result<(), String> {
     }
 }
 
+/// Nomes dos programas abertos agora (o .exe sem extensão, em minúsculas).
+pub fn running_exes() -> std::collections::HashSet<String> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+    };
+    let mut out = std::collections::HashSet::new();
+    unsafe {
+        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return out };
+        let mut e = PROCESSENTRY32W { dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
+        if Process32FirstW(snap, &mut e).is_ok() {
+            loop {
+                let len = e.szExeFile.iter().position(|&c| c == 0).unwrap_or(e.szExeFile.len());
+                let name = String::from_utf16_lossy(&e.szExeFile[..len]).to_lowercase();
+                out.insert(name.strip_suffix(".exe").unwrap_or(&name).to_string());
+                if Process32NextW(snap, &mut e).is_err() {
+                    break;
+                }
+            }
+        }
+        let _ = CloseHandle(snap);
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn enxerga_os_programas_abertos() {
+        let open = super::running_exes();
+        // o próprio teste está rodando, e o Windows sempre tem o explorer/svchost
+        let me = std::env::current_exe().unwrap();
+        let me = me.file_stem().unwrap().to_string_lossy().to_lowercase();
+        assert!(open.contains(&me), "não achei o próprio processo ({me})");
+        assert!(open.contains("svchost"));
+        assert!(open.iter().all(|n| n == &n.to_lowercase() && !n.ends_with(".exe")));
+    }
+}
+
 /// Abre uma tela do app Configurações (ex.: "apps-volume", "sound").
 pub fn open_settings(page: &str) {
     let uri = match page {
