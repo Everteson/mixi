@@ -1,0 +1,9 @@
+# Gerados / pesados de refazer
+src-tauri/target/
+src-tauri/gen/
+
+# Capturas de tela locais (podem mostrar o que estava atrás da janela)
+docs/screenshot.png
+
+# Estado de teste exportado com `mixi --dump --icons`
+ui/_demo.json

@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="pt-BR" data-theme="algodao">
+<head>
+<meta charset="utf-8">
+<title>Mixi</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600&amp;family=Nunito:wght@500;600;700;800&amp;display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="panel" class="panel" aria-label="Mixi, volume dos apps">
+
+  <header class="head">
+    <svg class="mascot" viewBox="0 0 48 48" aria-hidden="true">
+      <path class="m-band" d="M8 27 C8 7, 40 7, 40 27"></path>
+      <rect class="m-body" x="10" y="13" width="28" height="29" rx="13"></rect>
+      <rect class="m-cup" x="4" y="23" width="8" height="13" rx="4"></rect>
+      <rect class="m-cup" x="36" y="23" width="8" height="13" rx="4"></rect>
+      <g class="m-eyes"><circle cx="19.5" cy="26" r="2.4"></circle><circle cx="28.5" cy="26" r="2.4"></circle></g>
+      <ellipse class="m-cheek" cx="16" cy="31.5" rx="2.8" ry="1.8"></ellipse>
+      <ellipse class="m-cheek" cx="32" cy="31.5" rx="2.8" ry="1.8"></ellipse>
+      <path class="m-smile" d="M21.5 31 q2.5 2.6 5 0"></path>
+    </svg>
+    <div class="title">
+      <div class="brand">Mixi</div>
+      <div id="liveLabel" class="sub">carregando…</div>
+    </div>
+    <button id="pinBtn" class="icon-btn" aria-label="Manter painel aberto" aria-pressed="false" title="Manter aberto">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6l-1 6 3 3H7l3-3z"></path><path d="M12 13v7"></path></svg>
+    </button>
+    <button id="menuBtn" class="icon-btn" aria-label="Configurações" aria-haspopup="true" aria-expanded="false" title="Configurações">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"></path><circle cx="16" cy="6" r="2"></circle><circle cx="10" cy="12" r="2"></circle><circle cx="18" cy="18" r="2"></circle></svg>
+    </button>
+
+    <div id="menu" class="menu" role="menu" hidden>
+      <label class="menu-item switch">
+        <span>Iniciar com o Windows</span>
+        <input id="autostart" type="checkbox" role="menuitemcheckbox">
+        <span class="knob" aria-hidden="true"></span>
+      </label>
+      <button class="menu-item" role="menuitem" data-action="mixer">Abrir mixer do Windows</button>
+      <button class="menu-item" role="menuitem" data-action="sound">Configurações de som</button>
+      <button class="menu-item danger" role="menuitem" data-action="quit">Sair do Mixi</button>
+    </div>
+  </header>
+
+  <section class="card master" aria-label="Volume geral">
+    <div class="master-top">
+      <div class="master-text">
+        <div class="label">Volume geral</div>
+        <div id="masterLabel" class="big">–</div>
+      </div>
+      <button id="deviceBtn" class="pill" title="Trocar saída de áudio" aria-haspopup="true" aria-expanded="false">
+        <span id="deviceIcon" class="pill-icon" aria-hidden="true"></span>
+        <span id="deviceName">Saída</span>
+        <svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+      </button>
+      <button id="masterMute" class="icon-btn mute" aria-label="Silenciar tudo" aria-pressed="false"></button>
+    </div>
+    <input id="masterSlider" class="slider big-slider" type="range" min="0" max="100" value="0" aria-label="Volume geral">
+
+    <div id="outMenu" class="menu out-menu" role="menu" aria-label="Saída de áudio" hidden>
+      <div class="menu-title">Tocar som em</div>
+      <div id="outList" class="out-list"></div>
+      <button class="menu-item subtle" role="menuitem" data-action="sound">Configurações de som</button>
+    </div>
+  </section>
+
+  <div class="section-head">
+    <span>Apps com som</span>
+    <span class="hint">role ou arraste pra ajustar</span>
+  </div>
+
+  <section id="apps" class="apps" aria-label="Volume por app"></section>
+
+  <div id="modes" class="modes" role="group" aria-label="Modos rápidos"></div>
+
+  <footer class="foot">
+    <span class="label">Tema</span>
+    <div id="themes" class="themes" role="group" aria-label="Tema"></div>
+    <span id="themeName" class="theme-name"></span>
+  </footer>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
