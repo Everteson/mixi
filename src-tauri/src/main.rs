@@ -1,7 +1,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod audio;
+mod hotkeys;
+mod osd;
+mod settings;
 mod sys;
+mod trayface;
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -10,6 +14,9 @@ use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, WebviewWindow, WindowEvent};
+use tauri_plugin_global_shortcut::ShortcutState;
+
+pub const TRAY_ID: &str = "mixi";
 
 /// Largura da janela: painel (380) + margem transparente para a sombra.
 const WINDOW_WIDTH: f64 = 420.0;
@@ -55,7 +62,7 @@ fn hide_panel(app: &AppHandle) {
     let _ = app.emit("panel-hidden", ());
 }
 
-fn toggle_panel(app: &AppHandle) {
+pub fn toggle_panel(app: &AppHandle) {
     let Some(win) = main_window(app) else { return };
     if win.is_visible().unwrap_or(false) {
         hide_panel(app);
@@ -92,8 +99,70 @@ async fn set_master_volume(volume: f32) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn set_master_mute(muted: bool) -> Result<(), String> {
-    audio::set_master_mute(muted)
+async fn set_master_mute(app: AppHandle, muted: bool) -> Result<(), String> {
+    audio::set_master_mute(muted)?;
+    trayface::refresh(&app);
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_mic_volume(volume: f32) -> Result<(), String> {
+    audio::set_mic_volume(volume)
+}
+
+#[tauri::command]
+async fn set_mic_mute(app: AppHandle, muted: bool) -> Result<(), String> {
+    audio::set_mic_mute(muted)?;
+    trayface::refresh(&app);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_hotkeys(app: AppHandle) -> hotkeys::HotkeysState {
+    hotkeys::state(&app)
+}
+
+/// Salva a lista inteira de atalhos (o editor manda tudo a cada mudança) e registra de novo.
+#[tauri::command]
+fn set_hotkeys(app: AppHandle, list: Vec<settings::HotkeyDef>) -> hotkeys::HotkeysState {
+    settings::update(&app, |s| s.hotkeys = list);
+    hotkeys::apply(&app);
+    hotkeys::state(&app)
+}
+
+#[tauri::command]
+fn set_hotkeys_enabled(app: AppHandle, enabled: bool) -> hotkeys::HotkeysState {
+    settings::update(&app, |s| s.shortcuts = enabled);
+    hotkeys::apply(&app);
+    hotkeys::state(&app)
+}
+
+#[tauri::command]
+fn reset_hotkeys(app: AppHandle) -> hotkeys::HotkeysState {
+    settings::update(&app, |s| s.hotkeys = hotkeys::defaults());
+    hotkeys::apply(&app);
+    hotkeys::state(&app)
+}
+
+/// Enquanto a pessoa grava uma combinação, os atalhos ficam soltos (senão eles disparam).
+#[tauri::command]
+fn pause_hotkeys(app: AppHandle, paused: bool) {
+    if paused {
+        hotkeys::pause(&app);
+    } else {
+        hotkeys::apply(&app);
+    }
+}
+
+/// Teste da combinação antes de salvar: devolve o erro, se tiver.
+#[tauri::command]
+fn check_keys(keys: String) -> Option<String> {
+    hotkeys::parse(&keys).err()
+}
+
+#[tauri::command]
+fn show_osd(app: AppHandle, osd: osd::Osd) {
+    osd::show(&app, osd);
 }
 
 #[tauri::command]
@@ -222,16 +291,35 @@ fn main() {
     let start_pinned = std::env::args().any(|a| a == "--pinned");
 
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        hotkeys::handle(app, shortcut);
+                    }
+                })
+                .build(),
+        )
         .manage(Ui {
             last_hide: Mutex::new(Instant::now() - Duration::from_secs(5)),
             pinned: Mutex::new(start_pinned),
         })
+        .manage(hotkeys::Registered::default())
         .invoke_handler(tauri::generate_handler![
             get_state,
             set_app_volume,
             set_app_mute,
             set_master_volume,
             set_master_mute,
+            set_mic_volume,
+            set_mic_mute,
+            get_hotkeys,
+            set_hotkeys,
+            set_hotkeys_enabled,
+            reset_hotkeys,
+            pause_hotkeys,
+            check_keys,
+            show_osd,
             list_outputs,
             set_output,
             fit_window,
@@ -269,7 +357,7 @@ fn main() {
             )?;
             app.manage(autostart.clone());
 
-            TrayIconBuilder::with_id("mixi")
+            TrayIconBuilder::with_id(TRAY_ID)
                 .icon(Image::from_bytes(include_bytes!("../icons/tray.png"))?)
                 .tooltip("Mixi · volume dos apps")
                 .menu(&menu)
@@ -299,12 +387,22 @@ fn main() {
                 })
                 .build(app)?;
 
+            let handle = app.handle().clone();
+            app.manage(settings::SettingsState(Mutex::new(settings::load(&handle))));
+            hotkeys::apply(&handle);
+            osd::create(&handle)?;
+            trayface::start(handle.clone());
+
             if !start_hidden {
-                show_panel(app.handle());
+                show_panel(&handle);
             }
             Ok(())
         })
         .on_window_event(|window, event| {
+            // Só o painel some ao perder o foco; o aviso flutuante cuida de si.
+            if window.label() != "main" {
+                return;
+            }
             let app = window.app_handle();
             match event {
                 WindowEvent::Focused(false) => {

@@ -20,6 +20,7 @@
       <ellipse class="m-cheek" cx="16" cy="31.5" rx="2.8" ry="1.8"></ellipse>
       <ellipse class="m-cheek" cx="32" cy="31.5" rx="2.8" ry="1.8"></ellipse>
       <path class="m-smile" d="M21.5 31 q2.5 2.6 5 0"></path>
+      <path class="m-mouth-muted" d="M21.5 32 h5"></path>
     </svg>
     <div class="title">
       <div class="brand">Mixi</div>
@@ -38,6 +39,10 @@
         <input id="autostart" type="checkbox" role="menuitemcheckbox">
         <span class="knob" aria-hidden="true"></span>
       </label>
+      <button class="menu-item" role="menuitem" data-action="hotkeys">
+        <span>Atalhos de teclado</span>
+        <svg class="menu-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg>
+      </button>
       <button class="menu-item" role="menuitem" data-action="mixer">Abrir mixer do Windows</button>
       <button class="menu-item" role="menuitem" data-action="sound">Configurações de som</button>
       <button class="menu-item danger" role="menuitem" data-action="quit">Sair do Mixi</button>
@@ -66,6 +71,21 @@
     </div>
   </section>
 
+  <section id="micCard" class="row mic-row" aria-label="Microfone" hidden>
+    <div class="tile mic-tile" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0M12 18v3"></path></svg>
+    </div>
+    <div class="mid">
+      <div class="line">
+        <span id="micName" class="name">Microfone</span>
+        <span class="mic-level" aria-hidden="true"><i id="micLevel"></i></span>
+        <span id="micPct" class="pct"></span>
+      </div>
+      <input id="micSlider" class="slider" type="range" min="0" max="100" aria-label="Volume do microfone">
+    </div>
+    <button id="micMute" class="icon-btn mute" aria-pressed="false" title="Ctrl+Alt+M"></button>
+  </section>
+
   <div class="section-head">
     <span>Apps com som</span>
     <span class="hint">role ou arraste pra ajustar</span>
@@ -74,6 +94,31 @@
   <section id="apps" class="apps" aria-label="Volume por app"></section>
 
   <div id="modes" class="modes" role="group" aria-label="Modos rápidos"></div>
+
+  <section id="hkView" class="hk-view" aria-label="Atalhos de teclado" hidden>
+    <div class="hk-top">
+      <button id="hkBack" class="icon-btn" aria-label="Voltar">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg>
+      </button>
+      <div class="hk-title">
+        <div class="hk-heading">Atalhos de teclado</div>
+        <div class="sub">funcionam de qualquer lugar</div>
+      </div>
+      <label class="switch switch-only" title="Ligar ou desligar todos">
+        <input id="hkEnabled" type="checkbox" aria-label="Atalhos ligados">
+        <span class="knob" aria-hidden="true"></span>
+      </label>
+    </div>
+    <div id="hkList" class="hk-list"></div>
+    <div class="hk-actions">
+      <button id="hkAdd" class="pill">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+        <span>Novo atalho</span>
+      </button>
+      <button id="hkReset" class="link-btn">Restaurar padrão</button>
+    </div>
+    <p class="hk-hint">Clique nas teclas pra gravar outra combinação. Use Ctrl, Alt ou Win junto (ou uma tecla F sozinha). <b>Esc</b> cancela, <b>Backspace</b> apaga.</p>
+  </section>
 
   <footer class="foot">
     <span class="label">Tema</span>

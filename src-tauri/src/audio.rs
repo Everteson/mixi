@@ -16,7 +16,8 @@ use std::ffi::c_void;
 
 use windows::core::{Interface, GUID, HRESULT, PCWSTR, PWSTR};
 use windows::Win32::Foundation::PROPERTYKEY;
-use windows::Win32::Media::Audio::{eCommunications, eMultimedia, ERole, DEVICE_STATE_ACTIVE};
+use windows::Win32::Media::Audio::{eCapture, eCommunications, eMultimedia, ERole, DEVICE_STATE_ACTIVE};
+use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Foundation::{CloseHandle, S_OK};
@@ -88,8 +89,17 @@ pub struct AppInfo {
     pub system: bool,
 }
 
+#[derive(Serialize, Clone)]
+pub struct MicState {
+    pub name: String,
+    pub volume: f32,
+    pub muted: bool,
+    pub peak: f32,
+}
+
 #[derive(Serialize)]
 pub struct MixerState {
+    pub mic: Option<MicState>,
     pub device: String,
     pub device_kind: &'static str,
     pub master: f32,
@@ -123,13 +133,196 @@ fn com_init() {
     }
 }
 
-fn default_device() -> R<IMMDevice> {
+fn enumerator() -> R<IMMDeviceEnumerator> {
     com_init();
-    unsafe {
-        let en: IMMDeviceEnumerator =
-            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).map_err(err)?;
-        en.GetDefaultAudioEndpoint(eRender, eConsole).map_err(err)
+    unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).map_err(err) }
+}
+
+fn default_device() -> R<IMMDevice> {
+    unsafe { enumerator()?.GetDefaultAudioEndpoint(eRender, eConsole).map_err(err) }
+}
+
+// ---------- microfone ----------
+
+/// O microfone padrão e o de "comunicações" (Discord, Teams…), sem repetir se forem o mesmo.
+fn default_mics() -> Vec<IMMDevice> {
+    let Ok(en) = enumerator() else { return Vec::new() };
+    let mut out: Vec<IMMDevice> = Vec::new();
+    let mut ids: Vec<String> = Vec::new();
+    for role in [eConsole, eCommunications] {
+        let Ok(dev) = (unsafe { en.GetDefaultAudioEndpoint(eCapture, role) }) else { continue };
+        let Some(id) = device_id(&dev) else { continue };
+        if !ids.contains(&id) {
+            ids.push(id);
+            out.push(dev);
+        }
     }
+    out
+}
+
+pub fn mic_state() -> Option<MicState> {
+    let dev = default_mics().into_iter().next()?;
+    unsafe {
+        let ep: IAudioEndpointVolume = dev.Activate(CLSCTX_ALL, None).ok()?;
+        Some(MicState {
+            name: device_name(&dev),
+            volume: ep.GetMasterVolumeLevelScalar().unwrap_or(0.0),
+            muted: ep.GetMute().map(|b| b.as_bool()).unwrap_or(false),
+            peak: dev
+                .Activate::<IAudioMeterInformation>(CLSCTX_ALL, None)
+                .and_then(|m| m.GetPeakValue())
+                .unwrap_or(0.0),
+        })
+    }
+}
+
+pub fn mic_muted() -> bool {
+    mic_state().map(|m| m.muted).unwrap_or(false)
+}
+
+pub fn set_mic_volume(volume: f32) -> R<()> {
+    for dev in default_mics() {
+        unsafe {
+            let ep: IAudioEndpointVolume = dev.Activate(CLSCTX_ALL, None).map_err(err)?;
+            ep.SetMasterVolumeLevelScalar(volume.clamp(0.0, 1.0), std::ptr::null()).map_err(err)?;
+        }
+    }
+    Ok(())
+}
+
+/// Muda o mudo dos microfones padrão (os dois papéis, pra valer no Discord também).
+pub fn set_mic_mute(muted: bool) -> R<()> {
+    for dev in default_mics() {
+        unsafe {
+            let ep: IAudioEndpointVolume = dev.Activate(CLSCTX_ALL, None).map_err(err)?;
+            ep.SetMute(muted, std::ptr::null()).map_err(err)?;
+        }
+    }
+    Ok(())
+}
+
+/// Alterna o mudo. Devolve o nome do microfone e se ficou mudo; None se não tem microfone.
+pub fn toggle_mic_mute() -> R<Option<(String, bool)>> {
+    let Some(mic) = mic_state() else { return Ok(None) };
+    let muted = !mic.muted;
+    set_mic_mute(muted)?;
+    Ok(Some((mic.name, muted)))
+}
+
+// ---------- atalhos: app na tela, volume geral, próxima saída ----------
+
+/// A "key" do app que está na frente (a janela com foco), no mesmo formato das sessões.
+pub fn foreground_key() -> Option<String> {
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_invalid() {
+            return None;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == 0 || pid == std::process::id() {
+            return None;
+        }
+        exe_path(pid).map(|p| key_for_exe(&p))
+    }
+}
+
+fn step(current: f32, delta: f32) -> f32 {
+    // anda de 5 em 5% e "gruda" nos múltiplos de 5
+    (((current + delta) * 20.0).round() / 20.0).clamp(0.0, 1.0)
+}
+
+/// Sobe/desce o volume de um app. None se esse app não tem sessão de áudio.
+pub fn nudge_app(key: &str, delta: f32) -> R<Option<(String, f32)>> {
+    let dev = default_device()?;
+    let list: Vec<Session> = sessions(&dev)?.into_iter().filter(|s| s.key == key).collect();
+    let Some(first) = list.first() else { return Ok(None) };
+    let v = step(unsafe { first.volume.GetMasterVolume() }.unwrap_or(1.0), delta);
+    for s in &list {
+        unsafe {
+            s.volume.SetMasterVolume(v, std::ptr::null()).map_err(err)?;
+            if delta > 0.0 {
+                let _ = s.volume.SetMute(false, std::ptr::null());
+            }
+        }
+    }
+    let name = match &first.exe {
+        Some(p) => exe_meta(p).0,
+        None => "Sons do sistema".to_string(),
+    };
+    Ok(Some((name, v)))
+}
+
+pub fn nudge_master(delta: f32) -> R<f32> {
+    let dev = default_device()?;
+    unsafe {
+        let ep: IAudioEndpointVolume = dev.Activate(CLSCTX_ALL, None).map_err(err)?;
+        let v = step(ep.GetMasterVolumeLevelScalar().map_err(err)?, delta);
+        ep.SetMasterVolumeLevelScalar(v, std::ptr::null()).map_err(err)?;
+        if delta > 0.0 {
+            let _ = ep.SetMute(false, std::ptr::null());
+        }
+        Ok(v)
+    }
+}
+
+/// Passa para a próxima saída de áudio da lista. Devolve (nome, tipo).
+pub fn next_output() -> R<(String, &'static str)> {
+    let list = list_outputs()?;
+    if list.len() < 2 {
+        return Err("só existe uma saída de áudio".into());
+    }
+    let i = list.iter().position(|o| o.default).unwrap_or(0);
+    let next = &list[(i + 1) % list.len()];
+    set_output(&next.id)?;
+    Ok((next.name.clone(), next.kind))
+}
+
+/// O volume geral está no mudo?
+pub fn master_muted() -> bool {
+    let Ok(dev) = default_device() else { return false };
+    unsafe {
+        dev.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None)
+            .and_then(|ep| ep.GetMute())
+            .map(|b| b.as_bool())
+            .unwrap_or(false)
+    }
+}
+
+/// Alterna o mudo geral. Devolve se ficou mudo.
+pub fn toggle_master_mute() -> R<bool> {
+    let muted = !master_muted();
+    set_master_mute(muted)?;
+    Ok(muted)
+}
+
+/// Alterna o mudo de um app. Devolve (nome, ficou mudo); None se ele não tem sessão de áudio.
+pub fn toggle_app_mute(key: &str) -> R<Option<(String, bool)>> {
+    let dev = default_device()?;
+    let list: Vec<Session> = sessions(&dev)?.into_iter().filter(|s| s.key == key).collect();
+    let Some(first) = list.first() else { return Ok(None) };
+    let muted = !unsafe { first.volume.GetMute() }.map(|b| b.as_bool()).unwrap_or(false);
+    for s in &list {
+        unsafe {
+            s.volume.SetMute(muted, std::ptr::null()).map_err(err)?;
+        }
+    }
+    let name = match &first.exe {
+        Some(p) => exe_meta(p).0,
+        None => "Sons do sistema".to_string(),
+    };
+    Ok(Some((name, muted)))
+}
+
+/// Algum app (fora os sons do sistema) está tocando agora?
+pub fn any_playing() -> bool {
+    let Ok(dev) = default_device() else { return false };
+    let Ok(list) = sessions(&dev) else { return false };
+    list.iter().any(|s| unsafe {
+        !s.system
+            && !s.volume.GetMute().map(|b| b.as_bool()).unwrap_or(false)
+            && s.meter.as_ref().and_then(|m| m.GetPeakValue().ok()).unwrap_or(0.0) > 0.01
+    })
 }
 
 fn device_name(dev: &IMMDevice) -> String {
@@ -226,6 +419,15 @@ fn exe_stem(path: &str) -> String {
         .file_stem()
         .map(|s| s.to_string_lossy().to_lowercase())
         .unwrap_or_default()
+}
+
+/// Agrupa pelo nome do executável: as várias abas/processos do Chrome viram um app só.
+fn key_for_exe(path: &str) -> String {
+    let key = exe_stem(path);
+    match key.as_str() {
+        "steamwebhelper" => "steam".to_string(),
+        _ => key,
+    }
 }
 
 fn known_name(stem: &str) -> Option<&'static str> {
@@ -395,13 +597,7 @@ fn sessions(dev: &IMMDevice) -> R<Vec<Session>> {
             }
             let pid = ctl2.GetProcessId().unwrap_or(0);
             let Some(exe) = exe_path(pid) else { continue };
-            // Agrupa pelo nome do executável: as várias abas/processos do Chrome viram um só.
-            let key = exe_stem(&exe);
-            let key = match key.as_str() {
-                "steamwebhelper" => "steam".to_string(),
-                _ => key,
-            };
-            out.push(Session { key, exe: Some(exe), system, volume, meter });
+            out.push(Session { key: key_for_exe(&exe), exe: Some(exe), system, volume, meter });
         }
         Ok(out)
     }
@@ -444,7 +640,7 @@ pub fn get_state() -> R<MixerState> {
         }
         apps.sort_by(|a, b| a.system.cmp(&b.system).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
 
-        Ok(MixerState { device: device_name(&dev), device_kind: device_kind(&dev), master, master_muted, master_peak, apps })
+        Ok(MixerState { mic: mic_state(), device: device_name(&dev), device_kind: device_kind(&dev), master, master_muted, master_peak, apps })
     }
 }
 

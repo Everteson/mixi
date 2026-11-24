@@ -6,7 +6,7 @@
   <img alt="Windows 10 | 11" src="https://img.shields.io/badge/Windows-10%20%7C%2011-E8679F?style=for-the-badge&labelColor=3A2A3F">
   <img alt="Rust" src="https://img.shields.io/badge/Rust-stable-E8679F?style=for-the-badge&logo=rust&logoColor=FFF8FB&labelColor=3A2A3F">
   <img alt="Tauri 2" src="https://img.shields.io/badge/Tauri-2-E8679F?style=for-the-badge&logo=tauri&logoColor=FFF8FB&labelColor=3A2A3F">
-  <img alt="Executável de 3,4 MB" src="https://img.shields.io/badge/exe-3%2C4%20MB-3DBE8B?style=for-the-badge&labelColor=3A2A3F">
+  <img alt="Executável de 3,5 MB" src="https://img.shields.io/badge/exe-3%2C5%20MB-3DBE8B?style=for-the-badge&labelColor=3A2A3F">
   <a href="LICENSE"><img alt="Licença MIT" src="https://img.shields.io/badge/licen%C3%A7a-MIT-A99BFF?style=for-the-badge&labelColor=3A2A3F"></a>
 </p>
 
@@ -63,7 +63,7 @@
     <td valign="top">
       <img src="docs/icons/leve.svg" width="28" alt=""><br>
       <b>Leve de propósito</b><br>
-      Executável de 3,4 MB e ~30 MB de RAM. Usa o WebView2 que já vem no Windows, sem Electron, e só consulta o áudio enquanto o painel está aberto.
+      Executável de ~3,5 MB e ~30 MB de RAM. Usa o WebView2 que já vem no Windows, sem Electron. Fechado, só dá uma olhadinha no áudio a cada 1,5 s.
     </td>
     <td valign="top">
       <img src="docs/icons/comando.svg" width="28" alt=""><br>
@@ -74,6 +74,23 @@
       <img src="docs/icons/ligar.svg" width="28" alt=""><br>
       <b>Liga com o Windows</b><br>
       Uma chave no menu e ele já sobe escondido na bandeja. Só um Mixi roda por vez.
+    </td>
+  </tr>
+  <tr>
+    <td valign="top">
+      <img src="docs/icons/microfone.svg" width="28" alt=""><br>
+      <b>Microfone</b><br>
+      Volume, mudo e o nível ao vivo de quanto ele está captando. O mudo vale pro microfone padrão e pro de chamadas, então pega no Discord também.
+    </td>
+    <td valign="top">
+      <img src="docs/icons/teclado.svg" width="28" alt=""><br>
+      <b>Atalhos do seu jeito</b><br>
+      Você grava a combinação e escolhe o que ela faz: mudo do microfone, o <b>app que está na tela</b>, um app específico, uma saída, um modo… Um aviso aparece embaixo sem roubar o foco do jogo.
+    </td>
+    <td valign="top">
+      <img src="docs/icons/mascote.svg" width="28" alt=""><br>
+      <b>Mascote que reage</b><br>
+      Na bandeja ele dorme quando nada toca, ganha um selo quando o microfone está mudo e fica com os fones cinza quando o som está mudo. Dá pra saber se o Discord te ouve só de olhar.
     </td>
   </tr>
 </table>
@@ -87,6 +104,9 @@
   </tr>
   <tr>
     <td colspan="2" align="center"><img src="docs/img/temas.jpg" alt="Os 4 temas lado a lado"><br><sub><b>Temas</b>: Algodão doce, Menta, Noite e Pêssego. Troca na hora pelas bolinhas do rodapé.</sub></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><img src="docs/img/caras-bandeja.png" alt="As caras do mascote na bandeja" width="384"><br><sub><b>Na bandeja</b>: acordado, dormindo (nada tocando há 20 s), microfone mudo e som mudo (fones cinza). Os dois mudos aparecem juntos.</sub></td>
   </tr>
 </table>
 
@@ -108,7 +128,8 @@ flowchart LR
 - O **painel** é uma página simples (`ui/`) e não sabe nada de áudio: ele pede o estado ao Rust e manda os ajustes.
 - O **Rust** fala direto com o Core Audio do Windows (WASAPI), o mesmo que o mixer das Configurações usa. Cada sessão de áudio é ligada ao `.exe` dono dela, e é dele que saem o nome e o ícone.
 - A **troca de saída** usa a interface interna `IPolicyConfig`. O Windows não tem API pública pra isso; EarTrumpet e SoundSwitch usam a mesma, do Windows 7 ao 11.
-- Com o painel **fechado**, nada é consultado: o Mixi fica parado na bandeja.
+- Com o painel **fechado**, a interface fica parada (sem consultas nem animações). Só uma thread do Rust confere a cada 1,5 s se algo está tocando e se o microfone está mudo, pra trocar a cara do mascote.
+- Os **atalhos** são registrados no Windows (`RegisterHotKey`): o Mixi só fica sabendo dessas combinações, nunca do resto do que você digita. O aviso é uma janelinha que não pega o foco e deixa o clique passar.
 
 ## Instalação
 
@@ -142,6 +163,28 @@ Na primeira vez o `cargo` baixa e compila as dependências (uns 3 minutos). O ex
 | **Alfinete** | o painel não some ao clicar fora |
 | **Esc** | fecha o menu aberto, ou o painel |
 
+<img src="docs/icons/teclado.svg" width="20" alt=""> **Atalhos de teclado**, de qualquer lugar. Os de fábrica:
+
+| Atalho | O que faz |
+|---|---|
+| `Ctrl` `Alt` `M` | liga ou muta o microfone |
+| `Ctrl` `Alt` `PgUp` / `PgDn` | sobe ou desce 5% o app que está na tela (sem som, mexe no volume geral) |
+| `Ctrl` `Alt` `O` | passa pra próxima saída de áudio |
+| `Ctrl` `Alt` `V` | abre ou fecha o painel |
+
+Pra mudar ou criar os seus: **Configurações → Atalhos de teclado**. Clique nas teclas de um atalho e aperte a combinação nova (com `Ctrl`, `Alt` ou `Win`, ou uma tecla `F` sozinha). Depois é só escolher o que ele faz:
+
+- mudo do microfone, de tudo, do app na tela ou de **um app específico** (ex.: só o Discord);
+- aumentar ou diminuir o app na tela, um app específico ou o volume geral;
+- próxima saída, ou **uma saída específica** (ex.: sempre o fone);
+- **ativar um modo** (Jogo, Foco, Chamada, Soninho);
+- abrir o Mixi.
+
+O editor avisa quando a combinação está **repetida** ou quando **outro programa já usa**. Tem também a chave pra desligar todos e o **Restaurar padrão**.
+
+> [!TIP]
+> Em teclados ABNT2, o `AltGr` funciona como `Ctrl`+`Alt`. Evite `Ctrl`+`Alt` com teclas que você usa com `AltGr` (como `Q`, `W`, `E` e os números), senão o caractere (`/`, `?`, `°`, `¹`…) para de sair.
+
 <img src="docs/icons/comando.svg" width="20" alt=""> Na linha de comando:
 
 ```powershell
@@ -158,6 +201,7 @@ mixi --pinned                # abre com o painel fixado
 
 - **Modos:** `MODES` e `CATEGORIES` no `ui/app.js`. Cada modo é um volume por tipo de app; as categorias são listas de nomes de `.exe`.
 - **Temas:** as variáveis no topo do `ui/style.css` (`[data-theme="..."]`) e a lista `THEMES` no `ui/app.js` (as bolinhas).
+- **Ações dos atalhos:** `run()` no `src-tauri/src/hotkeys.rs` e a lista `HK_ACTIONS` no `ui/app.js` (os ids precisam bater).
 - **Nomes dos apps:** `known_name()` no `src-tauri/src/audio.rs`. Os que não estão lá usam a descrição do próprio `.exe`.
 - **Mascote e ícones:** `tools/make_icons.py` desenha o mascote e gera `icon.ico` e `tray.png` sem dependências.
 - **Só o visual:** abra `ui/index.html` no navegador. Sem o Tauri, ele usa apps de mentira e dá pra mexer em tudo sem compilar.
@@ -167,7 +211,7 @@ mixi --pinned                # abre com o painel fixado
 <img src="docs/icons/privacidade.svg" width="20" alt="">
 
 - O Mixi não tem servidor, conta nem telemetria. O único acesso à internet é o das fontes (Nunito e Fredoka) no Google Fonts; sem internet, ele usa a Segoe UI.
-- Roda sem administrador. Só escreve no registro se você ligar o **Iniciar com o Windows** (em `HKCU`, só pro seu usuário).
+- Roda sem administrador. Só escreve no registro se você ligar o **Iniciar com o Windows** (em `HKCU`, só pro seu usuário). As preferências (inclusive os seus atalhos) ficam em `%APPDATA%\com.mixi.volume\settings.json`.
 - Ele lê o caminho do `.exe` de cada app com som pra mostrar o nome e o ícone, e nada além disso.
 - A troca de saída usa uma interface interna do Windows (`IPolicyConfig`); se a Microsoft mudar essa interface, essa parte pode parar de funcionar.
 

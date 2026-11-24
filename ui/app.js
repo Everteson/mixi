@@ -45,7 +45,9 @@ const DEVICE_ICONS = {
   other: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 9a4 4 0 0 1 0 6"/></svg>',
 };
 const DEVICE_KIND_LABEL = { headphones: 'Fone', speakers: 'Caixa de som', display: 'Monitor / TV', other: 'Saída de áudio' };
-const ICON_CHECK = '<svg class="out-check" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+const ICON_MIC = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>';
+const ICON_MIC_OFF = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/><path d="M4 4l16 16"/></svg>';
+const ICON_CHECK ='<svg class="out-check" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
 const ICON_BELL ='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4z"/><path d="M10 21h4"/></svg>';
 
 /* ================= estado ================= */
@@ -55,6 +57,10 @@ const els = {
   autostart: $('autostart'), masterLabel: $('masterLabel'), masterSlider: $('masterSlider'),
   masterMute: $('masterMute'), deviceBtn: $('deviceBtn'), deviceName: $('deviceName'),
   deviceIcon: $('deviceIcon'), outMenu: $('outMenu'), outList: $('outList'),
+  micCard: $('micCard'), micSlider: $('micSlider'), micMute: $('micMute'), micPct: $('micPct'),
+  micLevel: $('micLevel'), micName: $('micName'),
+  hkView: $('hkView'), hkList: $('hkList'), hkEnabled: $('hkEnabled'), hkBack: $('hkBack'),
+  hkAdd: $('hkAdd'), hkReset: $('hkReset'),
   apps: $('apps'), modes: $('modes'), themes: $('themes'), themeName: $('themeName'),
 };
 
@@ -99,6 +105,16 @@ function latestSender(fn) {
   };
 }
 
+/**
+ * Troca o ícone de um botão só quando ele muda de verdade. O painel se redesenha a cada
+ * 150 ms; trocar o ícone entre apertar e soltar o mouse fazia o Windows perder o clique.
+ */
+function setIcon(btn, html) {
+  if (btn.dataset.icon === html) return;
+  btn.dataset.icon = html;
+  btn.innerHTML = html;
+}
+
 function hold(key) { holding.set(key, Date.now() + 600); }
 function isHeld(key) { return (holding.get(key) || 0) > Date.now(); }
 
@@ -128,6 +144,45 @@ els.masterMute.addEventListener('click', () => {
   paintMaster(mixer.master, mixer.master_muted);
   invoke('set_master_mute', { muted: mixer.master_muted });
 });
+
+/* ================= microfone ================= */
+const sendMic = latestSender((v) => invoke('set_mic_volume', { volume: v }));
+
+els.micSlider.addEventListener('input', () => {
+  if (!mixer || !mixer.mic) return;
+  hold('__mic');
+  mixer.mic.volume = els.micSlider.value / 100;
+  paintMic(mixer.mic);
+  sendMic(mixer.mic.volume);
+});
+els.micCard.addEventListener('wheel', (e) => nudge(e, els.micSlider), { passive: false });
+
+els.micMute.addEventListener('click', () => {
+  if (!mixer || !mixer.mic) return;
+  mixer.mic.muted = !mixer.mic.muted;
+  hold('__mic');
+  paintMic(mixer.mic);
+  invoke('set_mic_mute', { muted: mixer.mic.muted });
+});
+
+function paintMic(mic) {
+  const had = !els.micCard.hidden;
+  els.micCard.hidden = !mic;
+  document.documentElement.classList.toggle('mic-muted', !!(mic && mic.muted));
+  if (had !== !!mic) fitWindow();
+  if (!mic) return;
+  const v = pct(mic.volume);
+  els.micSlider.value = v;
+  els.micSlider.style.setProperty('--v', v + '%');
+  els.micCard.classList.toggle('is-muted', mic.muted);
+  els.micPct.textContent = mic.muted ? 'mudo' : v + '%';
+  els.micCard.title = mic.name;
+  // raiz quadrada: a fala costuma ficar com pico baixo, assim a barrinha mexe de verdade
+  els.micLevel.style.width = mic.muted ? '0%' : Math.min(100, Math.round(Math.sqrt(mic.peak) * 100)) + '%';
+  setIcon(els.micMute, mic.muted ? ICON_MIC_OFF : ICON_MIC);
+  els.micMute.setAttribute('aria-pressed', String(mic.muted));
+  els.micMute.setAttribute('aria-label', mic.muted ? 'Ligar o microfone' : 'Mutar o microfone');
+}
 
 /* ================= saída de áudio ================= */
 function splitDeviceName(name) {
@@ -187,7 +242,8 @@ function paintMaster(v, muted) {
   els.masterSlider.style.setProperty('--v', pct(v) + '%');
   els.masterSlider.classList.toggle('is-muted', muted);
   els.masterLabel.textContent = muted ? 'mudo' : pct(v) + '%';
-  els.masterMute.innerHTML = muted ? ICON_MUTED : ICON_SPEAKER;
+  setIcon(els.masterMute, muted ? ICON_MUTED : ICON_SPEAKER);
+  document.documentElement.classList.toggle('sound-muted', muted);
   els.masterMute.setAttribute('aria-pressed', String(muted));
   els.masterMute.setAttribute('aria-label', muted ? 'Reativar todo o som' : 'Silenciar tudo');
 }
@@ -277,6 +333,7 @@ function render(state) {
   // Enquanto o usuário arrasta, o valor da tela manda (o Rust pode estar um passo atrás).
   if (mixer) {
     if (isHeld('__master')) { state.master = Number(els.masterSlider.value) / 100; state.master_muted = mixer.master_muted; }
+    if (isHeld('__mic') && state.mic && mixer.mic) { state.mic.volume = mixer.mic.volume; state.mic.muted = mixer.mic.muted; }
     for (const a of state.apps) {
       if (!isHeld(a.key)) continue;
       const old = mixer.apps.find((o) => o.key === a.key);
@@ -286,6 +343,7 @@ function render(state) {
   mixer = state;
 
   paintMaster(state.master, state.master_muted);
+  paintMic(state.mic);
   els.deviceName.textContent = splitDeviceName(state.device)[0];
   if (els.deviceIcon.dataset.kind !== state.device_kind) {
     els.deviceIcon.dataset.kind = state.device_kind;
@@ -344,24 +402,34 @@ function buildModes() {
     <button class="mode" data-mode="${m.id}" aria-pressed="false">
       <svg viewBox="0 0 24 24" aria-hidden="true">${m.icon}</svg><span>${m.label}</span>
     </button>`).join('');
-  els.modes.addEventListener('click', async (e) => {
+  els.modes.addEventListener('click', (e) => {
     const b = e.target.closest('.mode');
-    if (!b || !mixer) return;
-    const m = MODES.find((x) => x.id === b.dataset.mode);
-    setMode(m.id);
-    await invoke('set_master_mute', { muted: false });
-    await invoke('set_master_volume', { volume: m.master });
-    await Promise.all(mixer.apps.map((a) => {
-      const cat = category(a);
-      return Promise.all([
-        invoke('set_app_volume', { key: a.key, volume: m.vol[cat] }),
-        invoke('set_app_mute', { key: a.key, muted: m.mute.includes(cat) }),
-      ]);
-    }));
-    holding.clear();
-    poll();
+    if (b) applyMode(MODES.find((x) => x.id === b.dataset.mode), false);
   });
   setMode(activeMode);
+}
+
+/** Aplica um modo. `announce`: veio de um atalho, então mostra o aviso flutuante. */
+async function applyMode(m, announce) {
+  setMode(m.id);
+  // estado novo na hora: com o painel fechado, o `mixer` pode estar velho
+  const st = await invoke('get_state').catch(() => mixer);
+  if (!st) return;
+  await invoke('set_master_mute', { muted: false });
+  await invoke('set_master_volume', { volume: m.master });
+  await Promise.all(st.apps.map((a) => {
+    const cat = category(a);
+    return Promise.all([
+      invoke('set_app_volume', { key: a.key, volume: m.vol[cat] }),
+      invoke('set_app_mute', { key: a.key, muted: m.mute.includes(cat) }),
+    ]);
+  }));
+  holding.clear();
+  poll();
+  if (announce) {
+    invoke('show_osd', { osd: { icon: 'mode', title: 'Modo ' + m.label, detail: 'volumes ajustados', value: null, alert: false } })
+      .catch(() => {});
+  }
 }
 
 /* ================= temas ================= */
@@ -401,8 +469,204 @@ function toggleMenu(open = els.menu.hidden) {
   if (open) toggleOutMenu(false);
   els.menu.hidden = !open;
   els.menuBtn.setAttribute('aria-expanded', String(open));
-  if (open) invoke('get_autostart').then((on) => { els.autostart.checked = on; }).catch(() => {});
+  if (!open) return;
+  invoke('get_autostart').then((on) => { els.autostart.checked = on; }).catch(() => {});
 }
+
+/* ================= editor de atalhos ================= */
+// Os ids batem com os do hotkeys.rs. `target`: o que mais a ação precisa escolher.
+const HK_ACTIONS = [
+  { id: 'mic-mute', label: 'Mudo do microfone' },
+  { id: 'focus-up', label: 'Aumentar o app na tela' },
+  { id: 'focus-down', label: 'Diminuir o app na tela' },
+  { id: 'focus-mute', label: 'Mudo do app na tela' },
+  { id: 'app-up', label: 'Aumentar um app…', target: 'app' },
+  { id: 'app-down', label: 'Diminuir um app…', target: 'app' },
+  { id: 'app-mute', label: 'Mudo de um app…', target: 'app' },
+  { id: 'master-up', label: 'Aumentar o volume geral' },
+  { id: 'master-down', label: 'Diminuir o volume geral' },
+  { id: 'master-mute', label: 'Mudo de tudo' },
+  { id: 'next-output', label: 'Próxima saída de áudio' },
+  { id: 'output', label: 'Tocar numa saída…', target: 'output' },
+  { id: 'mode', label: 'Ativar um modo…', target: 'mode' },
+  { id: 'open-panel', label: 'Abrir o Mixi' },
+];
+const HK_STATUS = {
+  ok: '',
+  desligado: '',
+  ocupado: 'Outro programa já usa essa combinação.',
+  repetido: 'Repetido: outro atalho daqui já usa essas teclas.',
+  'sem teclas': 'Clique nas teclas pra gravar uma combinação.',
+};
+const KEY_NAMES = {
+  PageUp: 'PgUp', PageDown: 'PgDn', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→',
+  Space: 'Espaço', Minus: '-', Equal: '=', Backquote: '\'', BracketLeft: '´', BracketRight: '[',
+  Backslash: ']', Semicolon: 'Ç', Quote: '~', Comma: ',', Period: '.', Slash: ';', IntlRo: '/',
+  Insert: 'Ins', Delete: 'Del', Home: 'Home', End: 'End', Enter: 'Enter', Tab: 'Tab',
+  Backspace: '⌫', PrintScreen: 'PrtSc', Pause: 'Pause', ScrollLock: 'ScrLk',
+};
+const ICON_TRASH = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M10 7V5h4v2M7 7l1 13h8l1-13"/></svg>';
+
+let hk = { enabled: true, list: [] };
+let hkOutputs = [];
+let recording = null;
+
+function keyLabel(code) {
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit\d$/.test(code)) return code.slice(5);
+  if (/^Numpad\d$/.test(code)) return 'Num ' + code.slice(6);
+  if (code.startsWith('Numpad')) return 'Num ' + code.slice(6);
+  return KEY_NAMES[code] || code;
+}
+
+function keysHtml(keys) {
+  if (!keys) return '<span class="ph">clique e aperte as teclas</span>';
+  return keys.split('+').map((k) => `<kbd>${esc(['Ctrl', 'Alt', 'Shift', 'Win'].includes(k) ? k : keyLabel(k))}</kbd>`)
+    .join('<span class="plus">+</span>');
+}
+
+function targetOptions(kind, current, label) {
+  let opts = [];
+  if (kind === 'app') opts = (mixer ? mixer.apps : []).map((a) => ({ v: a.key, t: a.name }));
+  if (kind === 'output') opts = hkOutputs.map((o) => ({ v: o.id, t: splitDeviceName(o.name)[0] }));
+  if (kind === 'mode') opts = MODES.map((m) => ({ v: m.id, t: 'Modo ' + m.label }));
+  // o alvo salvo pode não estar ligado agora (app fechado, fone desconectado): mantém na lista
+  if (current && !opts.some((o) => o.v === current)) opts.unshift({ v: current, t: (label || current) + ' (fora agora)' });
+  if (!current) opts.unshift({ v: '', t: kind === 'app' ? 'Escolha o app…' : kind === 'output' ? 'Escolha a saída…' : 'Escolha o modo…' });
+  return opts.map((o) => `<option value="${esc(o.v)}"${o.v === current ? ' selected' : ''}>${esc(o.t)}</option>`).join('');
+}
+
+function renderHk() {
+  els.hkEnabled.checked = hk.enabled;
+  els.hkList.classList.toggle('off', !hk.enabled);
+  els.hkList.innerHTML = hk.list.map((d, i) => {
+    const act = HK_ACTIONS.find((a) => a.id === d.action) || HK_ACTIONS[0];
+    const isRec = recording && recording.i === i;
+    let status = isRec ? 'Aperte as teclas agora…' : (HK_STATUS[d.status] ?? d.status ?? '');
+    if (!isRec && act.target && !d.target) status = 'Escolha ' + (act.target === 'app' ? 'o app.' : act.target === 'output' ? 'a saída.' : 'o modo.');
+    return `
+      <div class="hk-card${status && !isRec ? ' bad' : ''}" data-i="${i}">
+        <div class="hk-row1">
+          <button class="keys${isRec ? ' recording' : ''}" data-i="${i}" aria-label="Teclas do atalho, clique pra gravar">${
+            isRec ? '<span class="ph">aperte as teclas…</span>' : keysHtml(d.keys)}</button>
+          <button class="icon-btn del" data-i="${i}" aria-label="Apagar este atalho">${ICON_TRASH}</button>
+        </div>
+        <div class="hk-row2">
+          <select class="act" data-i="${i}" aria-label="O que o atalho faz">${
+            HK_ACTIONS.map((a) => `<option value="${a.id}"${a.id === act.id ? ' selected' : ''}>${esc(a.label)}</option>`).join('')}</select>
+          ${act.target ? `<select class="tgt" data-i="${i}" aria-label="Em quem">${targetOptions(act.target, d.target, d.label)}</select>` : ''}
+        </div>
+        ${status ? `<div class="hk-status">${esc(status)}</div>` : ''}
+      </div>`;
+  }).join('') || '<div class="empty">Nenhum atalho. Crie o primeiro aqui embaixo.</div>';
+  fitWindow();
+}
+
+async function saveHk() {
+  const list = hk.list.map(({ keys, action, target, label }) => ({ keys, action, target: target || null, label: label || null }));
+  try { hk = await invoke('set_hotkeys', { list }); } catch (e) { console.error(e); }
+  renderHk();
+}
+
+async function openHotkeys() {
+  toggleMenu(false);
+  toggleOutMenu(false);
+  els.panel.classList.add('editing');
+  els.hkView.hidden = false;
+  [hk, hkOutputs] = await Promise.all([
+    invoke('get_hotkeys'),
+    invoke('list_outputs').catch(() => []),
+  ]);
+  renderHk();
+}
+
+function closeHotkeys() {
+  if (recording) recording.cancel();
+  els.panel.classList.remove('editing');
+  els.hkView.hidden = true;
+  fitWindow();
+}
+
+async function record(i) {
+  if (recording) recording.cancel();
+  await invoke('pause_hotkeys', { paused: true }); // senão a combinação dispara em vez de ser gravada
+  const onKey = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const mods = [];
+    if (e.ctrlKey) mods.push('Ctrl');
+    if (e.altKey) mods.push('Alt');
+    if (e.shiftKey) mods.push('Shift');
+    if (e.metaKey) mods.push('Win');
+    const btn = els.hkList.querySelector(`.keys[data-i="${i}"]`);
+    if (['Control', 'Alt', 'Shift', 'Meta', 'OS', 'AltGraph'].includes(e.key)) {
+      if (btn) btn.innerHTML = keysHtml(mods.join('+')) + '<span class="plus">+</span><span class="ph">…</span>';
+      return;
+    }
+    if (e.key === 'Escape' && !mods.length) return finish(null);
+    if ((e.key === 'Backspace' || e.key === 'Delete') && !mods.length) return finish('');
+    const isF = /^F\d{1,2}$/.test(e.code);
+    if (!mods.some((m) => m !== 'Shift') && !isF) {
+      if (btn) btn.innerHTML = '<span class="ph">use Ctrl, Alt ou Win junto</span>';
+      return;
+    }
+    finish([...mods, e.code].join('+'));
+  };
+  const finish = (keys) => {
+    window.removeEventListener('keydown', onKey, true);
+    recording = null;
+    if (keys !== null) hk.list[i].keys = keys;
+    saveHk(); // salva e registra tudo de novo (isso também "despausa" os atalhos)
+  };
+  recording = { i, cancel: () => finish(null) };
+  window.addEventListener('keydown', onKey, true);
+  renderHk();
+}
+
+els.menu.addEventListener('click', (e) => {
+  if (e.target.closest('[data-action="hotkeys"]')) openHotkeys();
+});
+els.hkBack.addEventListener('click', closeHotkeys);
+els.hkEnabled.addEventListener('change', async () => {
+  hk = await invoke('set_hotkeys_enabled', { enabled: els.hkEnabled.checked });
+  renderHk();
+});
+els.hkAdd.addEventListener('click', () => {
+  hk.list.push({ keys: '', action: 'mic-mute', target: null, label: null, status: 'sem teclas' });
+  record(hk.list.length - 1);
+  requestAnimationFrame(() => { els.hkList.scrollTop = els.hkList.scrollHeight; });
+});
+els.hkReset.addEventListener('click', async () => {
+  if (recording) recording.cancel();
+  hk = await invoke('reset_hotkeys');
+  renderHk();
+});
+els.hkList.addEventListener('click', (e) => {
+  const keys = e.target.closest('.keys');
+  if (keys) return record(Number(keys.dataset.i));
+  const del = e.target.closest('.del');
+  if (del) {
+    if (recording) recording.cancel();
+    hk.list.splice(Number(del.dataset.i), 1);
+    saveHk();
+  }
+});
+els.hkList.addEventListener('change', (e) => {
+  const sel = e.target;
+  const d = hk.list[Number(sel.dataset.i)];
+  if (!d) return;
+  if (sel.classList.contains('act')) {
+    const before = HK_ACTIONS.find((a) => a.id === d.action);
+    d.action = sel.value;
+    const after = HK_ACTIONS.find((a) => a.id === d.action);
+    // trocou o tipo de alvo (ex.: de app pra saída): o alvo antigo não serve mais
+    if (!after.target || !before || before.target !== after.target) { d.target = null; d.label = null; }
+  } else if (sel.classList.contains('tgt')) {
+    d.target = sel.value || null;
+    d.label = sel.value ? sel.selectedOptions[0].textContent.replace(/ \(fora agora\)$/, '') : null;
+  }
+  saveHk();
+});
 els.menuBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleMenu(); });
 document.addEventListener('click', (e) => {
   if (!els.menu.hidden && !els.menu.contains(e.target)) toggleMenu(false);
@@ -425,6 +689,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (!els.outMenu.hidden) toggleOutMenu(false);
   else if (!els.menu.hidden) toggleMenu(false);
+  else if (!els.hkView.hidden) closeHotkeys();
   else invoke('close_panel');
 });
 
@@ -441,7 +706,18 @@ listen('panel-shown', () => {
   startPolling();
   fitWindow();
 });
-listen('panel-hidden', () => { stopPolling(); setAwake(false); toggleMenu(false); toggleOutMenu(false); });
+listen('panel-hidden', () => {
+  stopPolling();
+  setAwake(false);
+  toggleMenu(false);
+  toggleOutMenu(false);
+  if (recording) recording.cancel(); // painel sumiu no meio da gravação: volta os atalhos
+});
+// Um atalho de "Ativar um modo" chegou pelo Rust (os modos moram aqui na interface).
+listen('apply-mode', ({ payload }) => {
+  const m = MODES.find((x) => x.id === payload);
+  if (m) applyMode(m, true);
+});
 // Lê o estado uma vez (pra janela já nascer com o tamanho certo) e só fica consultando
 // se o painel estiver aberto. Iniciado com --hidden, espera o primeiro clique na bandeja.
 poll().then(fitWindow);
@@ -452,6 +728,7 @@ invoke('panel_visible')
 /* ================= backend de mentira (só no navegador) ================= */
 function mockInvoke(cmd, args = {}) {
   const s = (mockInvoke.s ||= {
+    mic: { name: 'Microfone (USB Audio Device)', volume: 0.7, muted: false, peak: 0.08 },
     device: 'Fones de ouvido (Bluetooth)', device_kind: 'headphones', master: 0.8, master_muted: false, master_peak: 0.5,
     apps: [
       { key: 'chrome', name: 'Chrome', icon: null, volume: 0.3, muted: false, peak: 0.2, system: false },
@@ -470,6 +747,35 @@ function mockInvoke(cmd, args = {}) {
     case 'set_master_mute': s.master_muted = args.muted; break;
     case 'get_autostart': return Promise.resolve(false);
     case 'panel_visible': return Promise.resolve(true);
+    case 'set_mic_volume': s.mic.volume = args.volume; break;
+    case 'set_mic_mute': s.mic.muted = args.muted; break;
+    case 'get_hotkeys':
+    case 'set_hotkeys':
+    case 'set_hotkeys_enabled':
+    case 'reset_hotkeys': {
+      // imita o Rust: valida as teclas, acha repetidos e finge que Ctrl+Alt+KeyV está ocupado
+      const defaults = () => [
+        { keys: 'Ctrl+Alt+KeyM', action: 'mic-mute' }, { keys: 'Ctrl+Alt+PageUp', action: 'focus-up' },
+        { keys: 'Ctrl+Alt+PageDown', action: 'focus-down' }, { keys: 'Ctrl+Alt+KeyO', action: 'next-output' },
+        { keys: 'Ctrl+Alt+KeyV', action: 'open-panel' },
+      ].map((d) => ({ ...d, target: null, label: null }));
+      if (!mockInvoke.hk) mockInvoke.hk = { enabled: true, list: defaults() };
+      if (cmd === 'set_hotkeys') mockInvoke.hk.list = args.list;
+      if (cmd === 'set_hotkeys_enabled') mockInvoke.hk.enabled = args.enabled;
+      if (cmd === 'reset_hotkeys') mockInvoke.hk.list = defaults();
+      const seen = new Set();
+      const list = mockInvoke.hk.list.map((d) => {
+        let status = 'ok';
+        if (!mockInvoke.hk.enabled) status = 'desligado';
+        else if (!d.keys) status = 'sem teclas';
+        else if (seen.has(d.keys)) status = 'repetido';
+        else if (d.keys === 'Ctrl+Alt+KeyV') status = 'ocupado';
+        seen.add(d.keys);
+        return { ...d, status };
+      });
+      return Promise.resolve({ enabled: mockInvoke.hk.enabled, list });
+    }
+    case 'pause_hotkeys': case 'show_osd': return Promise.resolve();
     case 'list_outputs':
       if (mockInvoke.outputs) return Promise.resolve(mockInvoke.outputs.map((o) => ({ ...o, default: o.name === s.device })));
       return Promise.resolve([

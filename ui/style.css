@@ -37,6 +37,8 @@ body {
 button { font: inherit; color: inherit; border: 0; background: none; padding: 0; margin: 0; cursor: pointer; }
 button:focus-visible, input:focus-visible + .knob { outline: 3px solid var(--text); outline-offset: 2px; }
 svg { display: block; }
+/* O clique sempre cai no botão, nunca no desenho de dentro (que pode ser trocado). */
+button svg, button span, button img { pointer-events: none; }
 [hidden] { display: none !important; }
 
 /* ---------- painel ---------- */
@@ -65,7 +67,14 @@ svg { display: block; }
 .m-cup { fill: var(--ink); }
 .m-eyes { fill: #2B1D2F; transform-origin: 24px 26px; animation: blink 5s infinite; }
 .m-cheek { fill: var(--cheek); }
-.m-smile { fill: none; stroke: #2B1D2F; stroke-width: 2; stroke-linecap: round; }
+.m-smile, .m-mouth-muted { fill: none; stroke: #2B1D2F; stroke-width: 2; stroke-linecap: round; }
+.m-mouth-muted { display: none; }
+.mic-muted .m-smile { display: none; }
+/* som (volume geral) mudo: os fones do mascote ficam cinza */
+.m-band, .m-cup { transition: stroke .2s ease, fill .2s ease; }
+.sound-muted .m-band { stroke: var(--muted-fill); }
+.sound-muted .m-cup { fill: var(--muted-fill); }
+.mic-muted .m-mouth-muted { display: inline; }
 @keyframes blink { 0%, 94%, 100% { transform: scaleY(1); } 96% { transform: scaleY(.1); } }
 .title { display: flex; flex-direction: column; flex-grow: 1; min-width: 0; }
 .brand { font-family: 'Fredoka', 'Nunito', sans-serif; font-weight: 600; font-size: 24px; line-height: 1.1; }
@@ -103,6 +112,62 @@ svg { display: block; }
 .knob::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .15s; }
 .switch input:checked + .knob { background: var(--accent); }
 .switch input:checked + .knob::after { transform: translateX(16px); }
+
+/* menu de configurações */
+.menu { width: 260px; }
+.menu-chev { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+
+/* editor de atalhos: ocupa o painel no lugar do conteúdo */
+.panel.editing > :not(.head):not(.hk-view) { display: none !important; }
+.hk-view { display: flex; flex-direction: column; gap: 10px; }
+.hk-top { display: flex; align-items: center; gap: 10px; }
+.hk-title { flex-grow: 1; min-width: 0; }
+.hk-heading { font-size: 18px; font-weight: 800; line-height: 1.2; }
+.switch-only { position: relative; display: flex; padding: 10px 2px; cursor: pointer; }
+.switch-only input { position: absolute; opacity: 0; }
+.hk-list { display: flex; flex-direction: column; gap: 8px; max-height: 470px; overflow-y: auto; margin-right: -6px; padding-right: 6px; }
+.hk-list::-webkit-scrollbar { width: 6px; }
+.hk-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+.hk-list.off { opacity: .55; }
+.hk-card { display: flex; flex-direction: column; gap: 8px; padding: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 18px; animation: row-in .2s ease; }
+.hk-card.bad { border-color: var(--accent); }
+.hk-row1, .hk-row2 { display: flex; align-items: center; gap: 8px; }
+.keys {
+  flex-grow: 1; min-height: 40px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px;
+  padding: 4px 8px; border-radius: 12px; background: var(--soft); border: 2px dashed transparent; text-align: left;
+}
+.keys:hover { border-color: var(--accent); }
+.keys.recording { border-color: var(--accent); background: var(--bg); }
+.keys kbd {
+  padding: 3px 8px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); border-bottom-width: 3px;
+  font: inherit; font-size: 12px; font-weight: 800; color: var(--ink);
+}
+.keys .plus { font-size: 12px; font-weight: 800; color: var(--sub); }
+.keys .ph { font-size: 13px; font-weight: 700; color: var(--sub); }
+.hk-card .del { width: 40px; height: 40px; border-radius: 13px; }
+.hk-card select {
+  flex: 1; min-width: 0; height: 38px; padding: 0 30px 0 10px; border-radius: 12px;
+  border: 1px solid var(--border); background-color: var(--bg); color: var(--text);
+  font: inherit; font-size: 13px; font-weight: 700; appearance: none; cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23998aa3' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 10px center; background-size: 14px;
+}
+.hk-card select:focus-visible { outline: 3px solid var(--text); outline-offset: 1px; }
+.hk-card option { background: var(--surface); color: var(--text); }
+.hk-status { font-size: 12px; font-weight: 800; color: var(--ink); padding: 0 4px; }
+.hk-actions { display: flex; align-items: center; gap: 10px; }
+.hk-actions .pill svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; }
+.link-btn { margin-left: auto; padding: 10px 6px; font-size: 13px; font-weight: 800; color: var(--sub); text-decoration: underline; text-underline-offset: 3px; }
+.hk-hint { margin: 0; padding: 0 4px; font-size: 12px; font-weight: 600; line-height: 1.45; color: var(--sub); }
+.hk-hint b { color: var(--ink); }
+
+/* microfone */
+.mic-tile { background: var(--soft); color: var(--ink); }
+.mic-level { width: 40px; height: 6px; flex-shrink: 0; border-radius: 3px; background: var(--soft); overflow: hidden; }
+.mic-level i { display: block; height: 100%; width: 0; border-radius: 3px; background: var(--accent); transition: width .12s linear; }
+.mic-row.is-muted { background: var(--soft); border-color: var(--accent); }
+.mic-row.is-muted .mic-tile { background: var(--accent); color: var(--on-accent); }
+.mic-row.is-muted .pct { color: var(--ink); }
 
 /* menu de saídas de áudio */
 .out-menu { top: 66px; right: 12px; width: 300px; }
@@ -230,6 +295,7 @@ svg { display: block; }
 /* Painel fechado: nada anima (a WebView continua desenhando mesmo com a janela escondida). */
 .asleep *, .asleep *::before, .asleep *::after { animation-play-state: paused !important; }
 .asleep .eq { display: none !important; }
+.asleep .mic-level i { transition: none; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
